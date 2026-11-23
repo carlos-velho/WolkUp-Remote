@@ -1,0 +1,45 @@
+name: Validar base RustDesk
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/validar-base.yml'
+      - 'upstream/rustdesk.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout WolkUp Remote
+        uses: actions/checkout@v4
+      - name: Verificar commit RustDesk fixado
+        shell: bash
+        run: |
+          set -euo pipefail
+          source upstream/rustdesk.lock
+          test "$RUSTDESK_REPOSITORY" = "rustdesk/rustdesk"
+          test "$RUSTDESK_TAG" = "1.5.3"
+          test "$RUSTDESK_COMMIT" = "95cca3f661f635b3cc85c04935fe8d96d8f432ef"
+          git ls-remote "https://github.com/$RUSTDESK_REPOSITORY.git" "refs/tags/$RUSTDESK_TAG" > tag.txt
+          grep -q "$RUSTDESK_COMMIT" tag.txt
+          echo "Origem e versao verificadas"
+      - name: Obter codigo fonte de referencia
+        uses: actions/checkout@v4
+        with:
+          repository: rustdesk/rustdesk
+          ref: 95cca3f661f635b3cc85c04935fe8d96d8f432ef
+          path: upstream-source
+          submodules: recursive
+          persist-credentials: false
+      - name: Verificar licenca e arquivos de compilacao
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f upstream-source/LICENCE
+          grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" upstream-source/LICENCE
+          test -f upstream-source/.github/workflows/flutter-build.yml
+          test -f upstream-source/Cargo.toml
+          echo "Fonte e licenca verificadas; nenhuma compilacao foi executada."
