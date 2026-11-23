@@ -1,0 +1,14 @@
+# Build e arquivos locais
+build/
+dist/
+target/
+*.log
+*.tmp
+*.bak
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+*.pem
