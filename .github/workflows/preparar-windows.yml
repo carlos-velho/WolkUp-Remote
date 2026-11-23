@@ -1,0 +1,39 @@
+name: Preparar compilacao Windows x64
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/preparar-windows.yml'
+      - 'upstream/rustdesk.lock'
+permissions:
+  contents: read
+jobs:
+  fonte-windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout WolkUp Remote
+        uses: actions/checkout@v4
+      - name: Obter RustDesk 1.5.3 e submodulos
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none --recurse-submodules https://github.com/rustdesk/rustdesk.git rustdesk-source
+          if ($LASTEXITCODE -ne 0) { throw "Clone falhou" }
+          cd rustdesk-source
+          git checkout --detach 95cca3f661f635b3cc85c04935fe8d96d8f432ef
+          if ($LASTEXITCODE -ne 0) { throw "Checkout falhou" }
+          git submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw "Submodulos falharam" }
+          $sha = git rev-parse HEAD
+          if ($sha -ne "95cca3f661f635b3cc85c04935fe8d96d8f432ef") { throw "Commit incorreto" }
+      - name: Inspecionar pre-requisitos Windows
+        shell: pwsh
+        run: |
+          $paths = @("rustdesk-source/Cargo.toml", "rustdesk-source/LICENCE", "rustdesk-source/flutter/pubspec.yaml", "rustdesk-source/.github/workflows/flutter-build.yml")
+          foreach ($p in $paths) { if (-not (Test-Path $p)) { throw "Arquivo ausente: $p" } }
+          "Origem e estrutura Windows x64 verificadas. Este job nao produz executavel." | Out-File -FilePath status-build.txt -Encoding utf8
+      - name: Publicar diagnostico
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-windows
+          path: status-build.txt
