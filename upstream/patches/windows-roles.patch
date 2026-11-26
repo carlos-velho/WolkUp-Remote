@@ -1,22 +1,49 @@
+diff --git a/flutter/lib/desktop/pages/desktop_home_page.dart b/flutter/lib/desktop/pages/desktop_home_page.dart
+index 12951ca..104e36f 100644
+--- a/flutter/lib/desktop/pages/desktop_home_page.dart
++++ b/flutter/lib/desktop/pages/desktop_home_page.dart
+@@ -87,7 +87,15 @@ class _DesktopHomePageState extends State<DesktopHomePage>
+         ),
+       Align(
+         alignment: Alignment.center,
+-        child: loadLogo(),
++        child: bind.mainGetAppNameSync().startsWith('WolkUpRemote-')
++            ? const Padding(
++                padding: EdgeInsets.all(12),
++                child: Text(
++                  'WolkUp Balanças, Automação Comercial e Tecnologia',
++                  textAlign: TextAlign.center,
++                ),
++              )
++            : loadLogo(),
+       ),
+       buildTip(context),
+       if (!isOutgoingOnly) buildIDBoard(context),
 diff --git a/src/client.rs b/src/client.rs
-index ea71ca4..527614f 100644
+index ea71ca4..99fee33 100644
 --- a/src/client.rs
 +++ b/src/client.rs
-@@ -387,6 +387,9 @@ impl Client {
+@@ -387,6 +387,15 @@ impl Client {
          ),
          (i32, String),
      )> {
 +        if crate::common::WOLKUP_ROLE == Some("Cliente") {
 +            bail!("Outbound remote sessions are disabled in WolkUp Remote Cliente");
 +        }
++        #[cfg(windows)]
++        if crate::common::WOLKUP_ROLE == Some("Gerenciador")
++            && !crate::platform::windows::wolkup_operator_is_authorized()
++        {
++            bail!("A conta do Windows não está autorizada pela WolkUp a iniciar atendimentos");
++        }
          debug_assert!(peer == interface.get_id());
          interface.update_direct(None);
          interface.update_received(false);
 diff --git a/src/common.rs b/src/common.rs
-index 4bc5bc2..1ba08f5 100644
+index 4bc5bc2..367e3ec 100644
 --- a/src/common.rs
 +++ b/src/common.rs
-@@ -120,7 +120,22 @@ impl Drop for SimpleCallOnReturn {
+@@ -120,7 +120,28 @@ impl Drop for SimpleCallOnReturn {
      }
  }
  
@@ -34,12 +61,18 @@ index 4bc5bc2..1ba08f5 100644
 +            .write()
 +            .unwrap()
 +            .insert("conn-type".to_owned(), direction.to_owned());
++        if role == "Cliente" {
++            config::DEFAULT_SETTINGS
++                .write()
++                .unwrap()
++                .insert("approve-mode".to_owned(), "click".to_owned());
++        }
 +    }
 +
      #[cfg(all(target_os = "linux", feature = "drm"))]
      crate::platform::linux::dispatch_wayland_display_probe();
      #[cfg(target_os = "linux")]
-@@ -2507,6 +2522,9 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
+@@ -2507,6 +2528,9 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
  }
  
  pub fn load_custom_client() {
@@ -49,6 +82,68 @@ index 4bc5bc2..1ba08f5 100644
      #[cfg(debug_assertions)]
      if let Ok(data) = std::fs::read_to_string("./custom.txt") {
          read_custom_client(data.trim());
+diff --git a/src/ipc.rs b/src/ipc.rs
+index cf60c1d..b5733b0 100644
+--- a/src/ipc.rs
++++ b/src/ipc.rs
+@@ -1030,6 +1030,12 @@ async fn handle(data: Data, stream: &mut Connection) {
+                     if Config::is_disable_change_permanent_password() {
+                         log::warn!("Changing permanent password is disabled");
+                         updated = false;
++                    } else if crate::common::WOLKUP_ROLE == Some("Cliente")
++                        && !value.is_empty()
++                        && value.chars().count() < 16
++                    {
++                        log::warn!("WolkUp Remote permanent passwords must contain 16 characters or more");
++                        updated = false;
+                     } else {
+                         let affected = crate::trusted_devices::config::changes_password(&value);
+                         updated =
+diff --git a/src/platform/windows.rs b/src/platform/windows.rs
+index a09783d..35ceb33 100644
+--- a/src/platform/windows.rs
++++ b/src/platform/windows.rs
+@@ -1422,6 +1422,40 @@ fn get_reg_of_hkcr(subkey: &str, name: &str) -> Option<String> {
+     None
+ }
+ 
++pub(crate) fn wolkup_operator_is_authorized() -> bool {
++    use windows::{
++        core::{BOOL, PCWSTR},
++        Win32::{
++            Foundation::{LocalFree, HLOCAL},
++            Security::{Authorization::ConvertStringSidToSidW, CheckTokenMembership, PSID},
++        },
++    };
++    use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
++
++    let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(r"SOFTWARE\WolkUp\Remote")
++    else {
++        return false;
++    };
++    let Ok(group_sid) = key.get_value::<String, _>("OperatorGroupSid") else {
++        return false;
++    };
++    if !group_sid.starts_with("S-1-5-21-") || group_sid.contains('\0') {
++        return false;
++    }
++    let group_sid: Vec<u16> = group_sid.encode_utf16().chain(Some(0)).collect();
++    let mut sid = PSID::default();
++    let mut is_member = BOOL::default();
++    // The Windows API allocates the SID, then reads it to check the current token.
++    unsafe {
++        if ConvertStringSidToSidW(PCWSTR(group_sid.as_ptr()), &mut sid).is_err() {
++            return false;
++        }
++        let result = CheckTokenMembership(None, sid, &mut is_member);
++        let _ = LocalFree(Some(HLOCAL(sid.0)));
++        result.is_ok() && is_member.as_bool()
++    }
++}
++
+ pub fn get_install_info() -> (String, String, String, String) {
+     get_install_info_with_subkey(get_valid_subkey())
+ }
 diff --git a/src/server/connection.rs b/src/server/connection.rs
 index 4b2eec8..7383714 100644
 --- a/src/server/connection.rs

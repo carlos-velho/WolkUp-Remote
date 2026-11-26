@@ -1,0 +1,3 @@
+[submodule "upstream/rustdesk"]
+	path = upstream/rustdesk
+	url = https://github.com/rustdesk/rustdesk.git

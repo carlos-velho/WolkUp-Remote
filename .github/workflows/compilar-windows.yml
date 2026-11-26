@@ -158,6 +158,10 @@ jobs:
           flutter doctor -v
           flutter precache --windows
           Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          $engine = Get-FileHash -Algorithm SHA256 windows-x64-release.zip
+          if ($engine.Hash -ne 'ec8cabf36ee4ff24c8d98de25b00e70781eb03876265aee84d0fe554a110036e') {
+            throw "Unexpected Flutter engine SHA-256: $($engine.Hash)"
+          }
           Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
           mv -Force windows-x64-release/*  C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
 
@@ -236,41 +240,6 @@ jobs:
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec ${{ matrix.job.build-args }}
           mv ./flutter/build/windows/${{ matrix.job.flutter-arch }}/runner/Release ./rustdesk
 
-          # Download usbmmidd_v2.zip and extract it to ./rustdesk
-          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
-          Expand-Archive usbmmidd_v2.zip -DestinationPath .
-          Remove-Item -Path usbmmidd_v2\Win32 -Recurse
-          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
-          mv -Force .\usbmmidd_v2 ./rustdesk
-
-          # Download printer driver files and extract them to ./rustdesk
-          try {
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip -OutFile printer_driver_adapter.zip
-            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums -OutFile sha256sums
-
-            # Check and move the files
-            $checksum_driver = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*rustdesk_printer_driver_v4-1.4\.zip$').Matches.Groups[1].Value
-            $downloadsum_driver = Get-FileHash -Path rustdesk_printer_driver_v4-1.4.zip -Algorithm SHA256
-            $checksum_adapter = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*printer_driver_adapter\.zip$').Matches.Groups[1].Value
-            $downloadsum_adapter = Get-FileHash -Path printer_driver_adapter.zip -Algorithm SHA256
-            if ($checksum_driver -eq $downloadsum_driver.Hash -and $checksum_adapter -eq $downloadsum_adapter.Hash) {
-                Write-Output "rustdesk_printer_driver_v4-1.4, checksums match, extract the file."
-                Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
-                mkdir ./rustdesk/drivers
-                mv -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
-                Expand-Archive printer_driver_adapter.zip -DestinationPath .
-                mv -Force .\printer_driver_adapter.dll ./rustdesk
-            } elseif ($checksum_driver -ne $downloadsum_driver.Hash) {
-                Write-Output "rustdesk_printer_driver_v4-1.4, checksums do not match, ignore the file."
-            } else {
-                Write-Output "printer_driver_adapter.dll, checksums do not match, ignore the file."
-            }
-          } catch {
-              Write-Host "Ingore the printer driver error."
-          }
-
-
       - name: Package portable and installer executables
         env:
           WOLKUP_REMOTE_ROLE: ${{ matrix.role }}
@@ -289,11 +258,46 @@ jobs:
           Copy-Item $wrapper "dist/$name.exe"
           Copy-Item $wrapper "dist/$name-install.exe"
           Copy-Item LICENCE dist/
+          Copy-Item wolkup-source/docs/HOMOLOGACAO-WINDOWS.md dist/
           Copy-Item wolkup-source/upstream/rustdesk.lock dist/
           Copy-Item wolkup-source/upstream/patches/windows-roles.patch dist/
           Get-ChildItem dist -File | Sort-Object Name | ForEach-Object {
             "$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant())  $($_.Name)"
           } | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+
+      - name: Verify x64 portable payload and launch it without installing
+        env:
+          WOLKUP_REMOTE_ROLE: ${{ matrix.role }}
+        run: |
+          $name = "WolkUpRemote-$env:WOLKUP_REMOTE_ROLE"
+          foreach ($file in @("dist/$name.exe", "dist/$name-install.exe", "rustdesk/$name.exe")) {
+            $reader = [IO.BinaryReader]::new([IO.File]::OpenRead((Resolve-Path $file).Path))
+            try {
+              if ($reader.ReadUInt16() -ne 0x5A4D) { throw "Missing MZ header: $file" }
+              $reader.BaseStream.Position = 0x3C
+              $reader.BaseStream.Position = $reader.ReadUInt32()
+              if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) {
+                throw "Missing x64 PE header: $file"
+              }
+            } finally {
+              $reader.Dispose()
+            }
+          }
+          try {
+            Start-Process -FilePath (Resolve-Path "dist/$name.exe").Path -ArgumentList '--no-server'
+            $deadline = (Get-Date).AddSeconds(45)
+            do {
+              Start-Sleep -Seconds 2
+              $runner = Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object {
+                $_.Path -like "$env:LOCALAPPDATA\*" -and
+                @($_.Modules | Where-Object { $_.ModuleName -eq 'librustdesk.dll' }).Count -gt 0
+              }
+            } until ($runner -or (Get-Date) -gt $deadline)
+            if (!$runner) { throw "The packaged runner did not load librustdesk.dll" }
+            Write-Output "Loaded x64 WolkUp runner and librustdesk.dll in PID $($runner.Id)"
+          } finally {
+            Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Upload unsigned validation artifacts
         uses: actions/upload-artifact@v4
