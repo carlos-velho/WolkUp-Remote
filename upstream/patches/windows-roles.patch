@@ -1,0 +1,65 @@
+diff --git a/src/client.rs b/src/client.rs
+index ea71ca4..527614f 100644
+--- a/src/client.rs
++++ b/src/client.rs
+@@ -387,6 +387,9 @@ impl Client {
+         ),
+         (i32, String),
+     )> {
++        if crate::common::WOLKUP_ROLE == Some("Cliente") {
++            bail!("Outbound remote sessions are disabled in WolkUp Remote Cliente");
++        }
+         debug_assert!(peer == interface.get_id());
+         interface.update_direct(None);
+         interface.update_received(false);
+diff --git a/src/common.rs b/src/common.rs
+index 4bc5bc2..1ba08f5 100644
+--- a/src/common.rs
++++ b/src/common.rs
+@@ -120,7 +120,22 @@ impl Drop for SimpleCallOnReturn {
+     }
+ }
+ 
++pub(crate) const WOLKUP_ROLE: Option<&str> = option_env!("WOLKUP_REMOTE_ROLE");
++
+ pub fn global_init() -> bool {
++    if let Some(role) = WOLKUP_ROLE {
++        let (name, direction) = match role {
++            "Cliente" => ("WolkUpRemote-Cliente", "incoming"),
++            "Gerenciador" => ("WolkUpRemote-Gerenciador", "outgoing"),
++            _ => return false,
++        };
++        *config::APP_NAME.write().unwrap() = name.to_owned();
++        config::HARD_SETTINGS
++            .write()
++            .unwrap()
++            .insert("conn-type".to_owned(), direction.to_owned());
++    }
++
+     #[cfg(all(target_os = "linux", feature = "drm"))]
+     crate::platform::linux::dispatch_wayland_display_probe();
+     #[cfg(target_os = "linux")]
+@@ -2507,6 +2522,9 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
+ }
+ 
+ pub fn load_custom_client() {
++    if WOLKUP_ROLE.is_some() {
++        return;
++    }
+     #[cfg(debug_assertions)]
+     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
+         read_custom_client(data.trim());
+diff --git a/src/server/connection.rs b/src/server/connection.rs
+index 4b2eec8..7383714 100644
+--- a/src/server/connection.rs
++++ b/src/server/connection.rs
+@@ -532,6 +532,9 @@ impl Connection {
+         meta: super::ConnectionMeta,
+         unauthorized: UnauthorizedID,
+     ) {
++        if crate::common::WOLKUP_ROLE == Some("Gerenciador") {
++            return;
++        }
+         let super::ConnectionMeta {
+             control_permissions,
+             controlled_context,

@@ -1,9 +1,10 @@
-name: Compilar base Windows x64 (experimental)
+name: Compilar WolkUp Remote Windows x64 (homologação)
 on:
   workflow_dispatch:
   push:
     paths:
       - '.github/workflows/compilar-windows.yml'
+      - 'upstream/patches/**'
 permissions:
   contents: read
 env:
@@ -46,12 +47,13 @@ jobs:
   generate-bridge:
     uses: ./.github/workflows/wolkup-bridge.yml
   build-for-windows-flutter:
-    name: ${{ matrix.job.target }}
+    name: ${{ matrix.role }} Windows x64
     needs: [generate-bridge]
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
       matrix:
+        role: [Cliente, Gerenciador]
         job:
           # - { target: i686-pc-windows-msvc        , os: windows-2022                  }
           # - { target: x86_64-pc-windows-gnu       , os: windows-2022                  }
@@ -78,6 +80,16 @@ jobs:
           ref: 95cca3f661f635b3cc85c04935fe8d96d8f432ef
           persist-credentials: false
           submodules: recursive
+
+      - name: Checkout WolkUp source changes
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: wolkup-source
+          persist-credentials: false
+
+      - name: Apply WolkUp role patch
+        shell: bash
+        run: git apply --check wolkup-source/upstream/patches/windows-roles.patch && git apply wolkup-source/upstream/patches/windows-roles.patch
 
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -215,7 +227,9 @@ jobs:
         shell: bash
         run: echo "SODIUM_LIB_DIR=$VCPKG_ROOT/installed/${{ matrix.job.vcpkg-triplet }}/lib" >> "$GITHUB_ENV"
 
-      - name: Build rustdesk
+      - name: Build WolkUp engine and Windows runner
+        env:
+          WOLKUP_REMOTE_ROLE: ${{ matrix.role }}
         run: |
           # Windows: build RustDesk
           # --hwcodec is shared by all Windows targets; per-target extras (e.g. --vram) come from the matrix
@@ -257,9 +271,33 @@ jobs:
           }
 
 
-      - name: Upload experimental unsigned build
+      - name: Package portable and installer executables
+        env:
+          WOLKUP_REMOTE_ROLE: ${{ matrix.role }}
+        run: |
+          $name = "WolkUpRemote-$env:WOLKUP_REMOTE_ROLE"
+          Rename-Item ./rustdesk/rustdesk.exe "$name.exe"
+          python -m pip install -r libs/portable/requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location libs/portable
+          python ./generate.py -f ../../rustdesk -o . -e "../../rustdesk/$name.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          $wrapper = "./target/release/rustdesk-portable-packer.exe"
+          if (!(Test-Path $wrapper)) { $wrapper = "./libs/portable/target/release/rustdesk-portable-packer.exe" }
+          New-Item -ItemType Directory -Path dist
+          Copy-Item $wrapper "dist/$name.exe"
+          Copy-Item $wrapper "dist/$name-install.exe"
+          Copy-Item LICENCE dist/
+          Copy-Item wolkup-source/upstream/rustdesk.lock dist/
+          Copy-Item wolkup-source/upstream/patches/windows-roles.patch dist/
+          Get-ChildItem dist -File | Sort-Object Name | ForEach-Object {
+            "$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant())  $($_.Name)"
+          } | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+
+      - name: Upload unsigned validation artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-base-windows-x64-nao-homologado
-          path: rustdesk/
+          name: WolkUpRemote-${{ matrix.role }}-Windows-x64-homologacao
+          path: dist/
           if-no-files-found: error
