@@ -1,3 +1,72 @@
+diff --git a/flutter/lib/desktop/pages/connection_page.dart b/flutter/lib/desktop/pages/connection_page.dart
+index e552a77..305e3bd 100644
+--- a/flutter/lib/desktop/pages/connection_page.dart
++++ b/flutter/lib/desktop/pages/connection_page.dart
+@@ -312,6 +312,12 @@ class _ConnectionPageState extends State<ConnectionPage>
+             Row(
+               children: [
+                 Flexible(child: _buildRemoteIDTextField(context)),
++                if (bind.mainGetAppNameSync() == 'WolkUpRemote-Gerenciador')
++                  TextButton.icon(
++                    onPressed: () => _showWolkUpHistory(context),
++                    icon: const Icon(Icons.history),
++                    label: const Text('Histórico'),
++                  ),
+               ],
+             ).marginOnly(top: 22),
+             SizedBox(height: 12),
+@@ -325,6 +331,51 @@ class _ConnectionPageState extends State<ConnectionPage>
+     );
+   }
+ 
++  Future<void> _showWolkUpHistory(BuildContext context) async {
++    final response = await bind.mainGetCommon(key: 'wolkup-session-history');
++    if (!context.mounted) return;
++    final entries = response.isEmpty ? const [] : jsonDecode(response) as List;
++    await showDialog<void>(
++      context: context,
++      builder: (context) => AlertDialog(
++        title: const Text('Histórico de atendimentos'),
++        content: SizedBox(
++          width: 420,
++          height: 300,
++          child: response.isEmpty
++              ? const Text('Não foi possível carregar o histórico.')
++              : entries.isEmpty
++                  ? const Text('Nenhum atendimento registrado.')
++                  : ListView.builder(
++                      itemCount: entries.length,
++                      itemBuilder: (context, index) {
++                        final entry = entries[index] as Map;
++                        final date = DateTime.parse(entry['utc'] as String)
++                            .toLocal();
++                        final event = entry['event'] == 'connected'
++                            ? 'Conexão iniciada'
++                            : 'Conexão encerrada';
++                        final localizations = MaterialLocalizations.of(context);
++                        return ListTile(
++                          title: Text('$event · ${entry['peer_id']}'),
++                          subtitle: Text(
++                            '${localizations.formatShortDate(date)} '
++                            '${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(date))}',
++                          ),
++                        );
++                      },
++                    ),
++        ),
++        actions: [
++          TextButton(
++            onPressed: () => Navigator.of(context).pop(),
++            child: const Text('Fechar'),
++          ),
++        ],
++      ),
++    );
++  }
++
+   /// Callback for the connect button.
+   /// Connects to the selected peer.
+   void onConnect(
 diff --git a/flutter/lib/desktop/pages/desktop_home_page.dart b/flutter/lib/desktop/pages/desktop_home_page.dart
 index 12951ca..104e36f 100644
 --- a/flutter/lib/desktop/pages/desktop_home_page.dart
@@ -39,6 +108,54 @@ index ea71ca4..99fee33 100644
          debug_assert!(peer == interface.get_id());
          interface.update_direct(None);
          interface.update_received(false);
+diff --git a/src/client/io_loop.rs b/src/client/io_loop.rs
+index 1b197a8..c0d75bf 100644
+--- a/src/client/io_loop.rs
++++ b/src/client/io_loop.rs
+@@ -86,6 +86,7 @@ pub struct Remote<T: InvokeUiSession> {
+     last_update_jobs_status: (Instant, HashMap<i32, u64>),
+     // Set after PeerInfo for this round, not when the transport connects.
+     is_connected: bool,
++    wolkup_session: Option<uuid::Uuid>,
+     // Whether the scheduled initial snapshot may still be sent.
+     // The connection loop clears this when handling its result or a live clipboard update.
+     #[cfg(not(any(target_os = "android", target_os = "ios")))]
+@@ -140,6 +141,7 @@ impl<T: InvokeUiSession> Remote<T> {
+             timer: crate::rustdesk_interval(time::interval(SEC30)),
+             last_update_jobs_status: (Instant::now(), Default::default()),
+             is_connected: false,
++            wolkup_session: None,
+             #[cfg(not(any(target_os = "android", target_os = "ios")))]
+             initial_clipboard_pending: false,
+             first_frame: false,
+@@ -447,6 +449,9 @@ impl<T: InvokeUiSession> Remote<T> {
+                 self.handler.on_establish_connection_error(err.to_string());
+             }
+         }
++        if let Some(session) = self.wolkup_session.take() {
++            crate::wolkup_history::record(session, &self.handler.get_id(), "ended");
++        }
+         self.handle_disconnected(round);
+         #[cfg(target_os = "android")]
+         for job in &mut self.write_jobs {
+@@ -1820,6 +1825,17 @@ impl<T: InvokeUiSession> Remote<T> {
+                             self.handler.load_last_jobs();
+                         }
+ 
++                        if !self.is_connected
++                            && crate::common::WOLKUP_ROLE == Some("Gerenciador")
++                        {
++                            let session = uuid::Uuid::new_v4();
++                            crate::wolkup_history::record(
++                                session,
++                                &self.handler.get_id(),
++                                "connected",
++                            );
++                            self.wolkup_session = Some(session);
++                        }
+                         self.is_connected = true;
+                     }
+                     _ => {}
 diff --git a/src/common.rs b/src/common.rs
 index 4bc5bc2..367e3ec 100644
 --- a/src/common.rs
@@ -82,6 +199,26 @@ index 4bc5bc2..367e3ec 100644
      #[cfg(debug_assertions)]
      if let Ok(data) = std::fs::read_to_string("./custom.txt") {
          read_custom_client(data.trim());
+diff --git a/src/flutter_ffi.rs b/src/flutter_ffi.rs
+index 0d6ca0a..b618327 100644
+--- a/src/flutter_ffi.rs
++++ b/src/flutter_ffi.rs
+@@ -2763,6 +2763,15 @@ pub fn main_get_printer_names() -> SyncReturn<String> {
+ }
+ 
+ pub fn main_get_common(key: String) -> String {
++    if key == "wolkup-session-history" && crate::common::WOLKUP_ROLE == Some("Gerenciador") {
++        return match crate::wolkup_history::read() {
++            Ok(history) => history,
++            Err(err) => {
++                log::warn!("Could not read WolkUp session history: {err}");
++                String::new()
++            }
++        };
++    }
+     if key == "is-printer-installed" {
+         #[cfg(target_os = "windows")]
+         {
 diff --git a/src/ipc.rs b/src/ipc.rs
 index cf60c1d..b5733b0 100644
 --- a/src/ipc.rs
@@ -99,6 +236,18 @@ index cf60c1d..b5733b0 100644
                      } else {
                          let affected = crate::trusted_devices::config::changes_password(&value);
                          updated =
+diff --git a/src/lib.rs b/src/lib.rs
+index f6e48a1..9dabcf1 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -14,6 +14,7 @@ mod server;
+ #[cfg(not(any(target_os = "ios")))]
+ pub use self::server::*;
+ mod client;
++mod wolkup_history;
+ mod lan;
+ #[cfg(not(any(target_os = "ios")))]
+ mod rendezvous_mediator;
 diff --git a/src/platform/windows.rs b/src/platform/windows.rs
 index a09783d..35ceb33 100644
 --- a/src/platform/windows.rs
@@ -158,3 +307,91 @@ index 4b2eec8..7383714 100644
          let super::ConnectionMeta {
              control_permissions,
              controlled_context,
+diff --git a/src/wolkup_history.rs b/src/wolkup_history.rs
+new file mode 100644
+index 0000000..74524e4
+--- /dev/null
++++ b/src/wolkup_history.rs
+@@ -0,0 +1,82 @@
++use chrono::Utc;
++use serde::{Deserialize, Serialize};
++use std::{
++    collections::VecDeque,
++    fs::{self, File, OpenOptions},
++    io::{self, BufRead, BufReader, Seek, SeekFrom, Write},
++    path::PathBuf,
++};
++use uuid::Uuid;
++
++#[derive(Deserialize, Serialize)]
++struct Entry {
++    utc: String,
++    session: String,
++    peer_id: String,
++    event: String,
++}
++
++fn history_path() -> io::Result<PathBuf> {
++    let path = hbb_common::config::Config::path("atendimentos.jsonl");
++    if !path.is_absolute() {
++        return Err(io::Error::new(
++            io::ErrorKind::NotFound,
++            "Windows user profile is unavailable",
++        ));
++    }
++    Ok(path)
++}
++
++pub(crate) fn record(session: Uuid, peer_id: &str, event: &str) {
++    if let Err(err) = append(Entry {
++        utc: Utc::now().to_rfc3339(),
++        session: session.to_string(),
++        peer_id: peer_id.chars().take(256).collect(),
++        event: event.to_owned(),
++    }) {
++        hbb_common::log::warn!("Could not save WolkUp session history: {err}");
++    }
++}
++
++fn append(entry: Entry) -> io::Result<()> {
++    let path = history_path()?;
++    if let Some(dir) = path.parent() {
++        fs::create_dir_all(dir)?;
++    }
++    let mut line = serde_json::to_vec(&entry)?;
++    line.push(b'\n');
++    OpenOptions::new()
++        .create(true)
++        .append(true)
++        .open(path)?
++        .write_all(&line)
++}
++
++#[cfg(feature = "flutter")]
++pub(crate) fn read() -> io::Result<String> {
++    const MAX_BYTES: u64 = 256 * 1024;
++    const MAX_ENTRIES: usize = 200;
++
++    let file = match File::open(history_path()?) {
++        Ok(file) => file,
++        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok("[]".to_owned()),
++        Err(err) => return Err(err),
++    };
++    let mut buffer = BufReader::new(file);
++    let start = buffer.get_ref().metadata()?.len().saturating_sub(MAX_BYTES);
++    if start > 0 {
++        buffer.seek(SeekFrom::Start(start))?;
++        buffer.read_until(b'\n', &mut Vec::new())?;
++    }
++    let mut entries = VecDeque::new();
++    for line in buffer.split(b'\n') {
++        if let Ok(entry) = serde_json::from_slice::<Entry>(&line?) {
++            if entries.len() == MAX_ENTRIES {
++                entries.pop_front();
++            }
++            entries.push_back(entry);
++        }
++    }
++    entries.make_contiguous().reverse();
++    Ok(serde_json::to_string(&entries)?)
++}

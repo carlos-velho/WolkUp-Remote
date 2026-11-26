@@ -7,7 +7,7 @@ WolkUp Balanças, Automação Comercial e Tecnologia
 Extraia os artefatos da execução de homologação e compare o SHA-256 antes de executar. Use `Get-FileHash .\WolkUpRemote-Cliente.exe -Algorithm SHA256` e compare com `SHA256SUMS.txt`. Os executáveis desta etapa são sem assinatura digital.
 
 - Abra `WolkUpRemote-Cliente.exe` no computador atendido. Informe o ID ao técnico e confira a solicitação antes de aceitá-la. Encerre a sessão pela janela de atendimento.
-- Abra `WolkUpRemote-Gerenciador.exe` em uma conta autorizada do Windows. Informe o ID do computador atendido e solicite a conexão.
+- Abra `WolkUpRemote-Gerenciador.exe` em uma conta autorizada do Windows. Informe o ID do computador atendido e solicite a conexão. Use os favoritos para organizar os computadores e **Histórico** para consultar os atendimentos registrados neste perfil do Windows.
 - Use os arquivos com sufixo `-install.exe` para abrir o instalador integrado. No Cliente, confira o serviço e o ícone da bandeja após a instalação. Para remover, use **Aplicativos instalados** nas configurações do Windows.
 - Para habilitar acesso não assistido, o responsável pelo Cliente deve configurar uma senha exclusiva e aleatória com pelo menos 16 caracteres e alterar o modo de aprovação. Para revogar, encerre a sessão, volte à aprovação por clique e remova a senha permanente.
 
@@ -42,6 +42,7 @@ Use Windows 10 e Windows 11 x64 em redes independentes. Registre edição do Win
 | Acesso não assistido | Tentativa com senha curta falha. Teste senha válida e incorreta e repita após revogar o acesso. |
 | Internet | Confirme sessão entre duas redes e repita via relay. Interrompa a rede e observe reconexão e autorização. |
 | Recursos | Verifique teclado, mouse, clipboard, transferência de arquivo com hash, dois monitores e prompt UAC. |
+| Histórico | Abra uma sessão, encerre e confirme que os dois eventos aparecem com o ID e horário corretos. |
 | Desempenho | Meça CPU e memória em repouso e durante cinco minutos de sessão. Registre resolução, quantidade de monitores e condição da rede. |
 
 A compilação consulta o RustDesk 1.5.3 pelo commit fixado em `upstream/rustdesk.lock` e aplica `upstream/patches/windows-roles.patch`. O workflow registra os passos de geração de ponte Flutter, compilação e empacotamento. A atribuição e a licença AGPL-3.0 do RustDesk acompanham os artefatos de homologação.
