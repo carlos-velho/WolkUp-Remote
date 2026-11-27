@@ -398,7 +398,7 @@ index 0000000..74524e4
 diff --git a/flutter/lib/models/model.dart b/flutter/lib/models/model.dart
 --- a/flutter/lib/models/model.dart
 +++ b/flutter/lib/models/model.dart
-@@ -2131,9 +2131,9 @@
+@@ -2131,10 +2131,10 @@
      final h =
          desktop ? kDesktopDefaultDisplayHeight : kMobileDefaultDisplayHeight;
      return ViewStyle(
