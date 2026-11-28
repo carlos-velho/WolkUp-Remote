@@ -71,17 +71,18 @@ diff --git a/flutter/lib/desktop/pages/desktop_home_page.dart b/flutter/lib/desk
 index 12951ca..104e36f 100644
 --- a/flutter/lib/desktop/pages/desktop_home_page.dart
 +++ b/flutter/lib/desktop/pages/desktop_home_page.dart
-@@ -87,7 +87,15 @@ class _DesktopHomePageState extends State<DesktopHomePage>
+@@ -87,7 +87,16 @@
          ),
        Align(
          alignment: Alignment.center,
 -        child: loadLogo(),
 +        child: bind.mainGetAppNameSync().startsWith('WolkUpRemote-')
-+            ? const Padding(
-+                padding: EdgeInsets.all(12),
-+                child: Text(
-+                  'WolkUp Balanças, Automação Comercial e Tecnologia',
-+                  textAlign: TextAlign.center,
++            ? Padding(
++                padding: const EdgeInsets.all(12),
++                child: Image.asset(
++                  'assets/wolkup/logo.png',
++                  height: 90,
++                  fit: BoxFit.contain,
 +                ),
 +              )
 +            : loadLogo(),
